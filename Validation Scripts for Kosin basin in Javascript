@@ -1,0 +1,63 @@
+# Define your Kosi Basin area (upload your shapefile or draw polygon)
+var kosiBasin = /* your geometry */;
+# Load your QGIS-generated flood risk map from Assets
+var floodRiskMap = ee.Image(“projects/p6-flood-indudation-mapping/assets/flood_risk”);
+# Load Sentinel-1 SAR data for flood event validation
+var sentinel1 = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(kosiBasin)
+ #Adjust dates to match your flood event
+  .filterDate('2023-07-01', '2023-07-31') 
+ # Use VV polarization for water detection
+  .filter(ee.Filter.eq('transmitterReceiverPolarisation', ['VV']))
+  .first();
+#Calculate water extent from Sentinel-1 (VV < -15 dB threshold)
+var water = sentinel1.select('VV').lt(-15);
+# Load CHIRPS rainfall data for the same period
+var rainfall = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
+  .filterDate('2023-07-01', '2023-07-31')
+  .filterBounds(kosiBasin)
+  .sum();
+# Display layers for visual comparison
+Map.centerObject(kosiBasin, 9);
+
+#Display your QGIS flood risk map
+Map.addLayer(floodRiskMap, {
+  min: 1, 
+  max: 3, 
+  palette: ['blue', 'yellow', 'red']
+}, 'QGIS Flood Risk Map');
+#Display Sentinel-1 derived water extent
+Map.addLayer(water.selfMask(), {
+  palette: ['blue']
+}, 'Sentinel-1 Water Extent');
+
+# Display rainfall data
+Map.addLayer(rainfall, {
+  min: 0,
+  max: 500,
+  palette: ['white', 'blue', 'darkblue']
+}, 'Total Rainfall (mm)');
+
+# Calculate accuracy metrics
+var validation = water.rename('observed').addBands(
+  floodRiskMap.gt(2).rename('predicted') // Assuming class 3 is high flood risk
+);
+
+#Create confusion matrix
+var confusionMatrix = validation.errorMatrix('observed', 'predicted');
+
+# Print accuracy metrics
+print('Confusion Matrix:', confusionMatrix);
+print('Overall Accuracy:', confusionMatrix.accuracy());
+print('Producer Accuracy:', confusionMatrix.producersAccuracy());
+print('User Accuracy:', confusionMatrix.consumersAccuracy());
+print('Kappa Coefficient:', confusionMatrix.kappa());
+
+#Export the comparison for further analysis
+Export.image.toDrive({
+  image: water.addBands(floodRiskMap),
+  description: 'FloodMap_Validation',
+  scale: 30,
+  region: kosiBasin,
+  maxPixels: 1e13
+});
